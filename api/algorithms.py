@@ -48,20 +48,27 @@ def generateExtrapolationTable(sex, region):
     # pop1 = data[['Time', 'Age', SEX]].query('Location' == CNTRY)
     #print pop1
 
+    # pop1 now has {year, age, popn} for the given country and sex 1950-2100
+
     july1from1950to2100 = [inPosixDays(date(y, 7, 1)) for y in xrange(1950, 2100+1)]
 
     dateRange1950to2100inPosixDays = range(inPosixDays(date(1950,1,1)), inPosixDays(date(2100,12,31))+1)
 
     ''' --- Date interpolation function --- '''
     def dateInterp(iage):
+        """"
+        Given an empty column representing a single 5 year age band, interpolate external popn data
+        from yearly to daily data using splines, and return the daily population counts.
+        """
         popi = np.asarray(pop1.loc[dataStore.data.Age == iage.name, SEXES[sex]])
+        # popi is now a single column of yearly population for a given age and sex
 
         # spline interpolation function from Scipy Package
         iuspl = InterpolatedUnivariateSpline(july1from1950to2100, popi, k=4)
         return iuspl(dateRange1950to2100inPosixDays)
 
     # --- store the results of the date interpolation --- #
-    result1 = pd.DataFrame(index = range(0,len(dateRange1950to2100inPosixDays)), columns = range(0,100))
+    result1 = pd.DataFrame(index = range(0,len(dateRange1950to2100inPosixDays)), columns = range(0,100))    
     table = result1.apply(dateInterp, axis=0)
 
     # Change column names by appending "age_"
@@ -84,7 +91,11 @@ def generateExtrapolationTable(sex, region):
     # Add the fullDateRange to the result1
     table['date1'] = fullDateRange
 
+    # table will now be a crosstab of integer days (1950-2100) x single year of age (age_0-age_99)
+    # with a date type column appended
+
     return table
+    
 dataStore.registerTableBuilder(generateExtrapolationTable)   # TODO: not super nice architecture, but avoids the cyclic dependency for now
 
 def dayInterpA(table, date):
@@ -96,7 +107,7 @@ def dayInterpA(table, date):
     :return:
     """
     iDate = date.strftime('%Y-%m-%d')
-    # age 0 to 99
+    # age 0 to 99 - select a row containing popn by each single year of age for the given date
     popi = table[table.date1 == iDate]
 
     # Remove the columns for age 100 and the date1
@@ -107,6 +118,9 @@ def dayInterpA(table, date):
     popi = np.asarray(popi)
 
     # Interpolate the age in Days
+    # NOTE: this seems like a bad way to interpolate this - is it the case that
+    # the spline-interpolate population over the days of a year will necessarily
+    # add back up to the population in that year. Check this.
     iuspl2 = InterpolatedUnivariateSpline(AGE3, popi/365)
     iuspl2_pred = iuspl2(AGEOUT)
 
@@ -114,12 +128,19 @@ def dayInterpA(table, date):
     merged = pd.DataFrame(index = range(0,len(AGEOUT)), columns = ['AGE','POP'])
     merged['AGE'] = AGEOUT
     merged['POP'] = iuspl2_pred
+    
+    # CHECK: probably returns a frame containing popn by single day of age for the given date
     return merged
 
 def _calculateRankByDate(table, dob, date):
+    """
+    Returns the rank of a person born on dob for the given sex/country represented by table,
+    on the given date, if you lined up everybody by exact age in days from youngest to oldest.
+    """
+    
     # do the interpolation
-    iAge = inPosixDays(date) - inPosixDays(dob)   # FIXME: isn't this just (date - dob).days?
-    X = dayInterpA(table, date)
+    iAge = inPosixDays(date) - inPosixDays(dob)   # age in days at date # FIXME: isn't this just (date - dob).days?
+    X = dayInterpA(table, date) # X is the entire population count by single day of age on date
 
     # store age and pop in array
     ageArray = np.asarray(X.AGE)
@@ -170,6 +191,10 @@ def worldPopulationRankByDate(sex, region, dob, refdate):
     rank = _calculateRankByDate(table, dob, refdate)
     return long(rank*1000)
 
+# FIXME: this function seems very inefficient. It finds a date based on a rank, but in order to do that it
+# searches first by decade (10 calls to _calculateRankByDate) then by year (10 more calls) then interpolates
+# linearly (at least that's quick). _calculateRankByDate is itself slow (it does not cache dayInterpA results),
+# so this function is 20 x slow.
 def dateByWorldPopulationRank(sex, region, dob, rank):
     """
     finding the date for specific rank
@@ -202,10 +227,10 @@ def dateByWorldPopulationRank(sex, region, dob, rank):
     length_time = relativedelta(date(2100, 1, 1), dob).years
 
     # Make sure that difference between DOB and final Date < 100
-    l_max = min(int(np.floor(length_time/10)*10), 100)
+    l_max = min(int(np.floor(length_time/10)*10), 100) # number of years (floor full decades) between dob and 2100
 
     xx = []
-    for jj in range(1, (len(range(10, l_max+10, 10))+1)):
+    for jj in range(1, (len(range(10, l_max+10, 10))+1)): # iterates over decades between dob and 2100
         try:
             xx.append(_calculateRankByDate(table, dob, dob + relativedelta(days = jj*3650)))
         except Exception:

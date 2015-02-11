@@ -11,6 +11,7 @@ python-dateutil>=2.2
 # numeric and data analysis libraries
 numpy>=1.7.0
 pandas>=0.13.1
+scipy
 
 # WSGI server
 gunicorn==19.1.1

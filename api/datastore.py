@@ -89,12 +89,28 @@ class PickleDataStore(object):
 
     def readCSVs(self):
         start = time.clock()
+        # population by single year of age and year from 1950-2100
+        # ?, LocID, Location (Country), VarID, Variant, Time, Age, pop male, pop female, pop total
         self.data = pd.read_csv(settings.CSV_POPULATION_PATH)
+        
+        # life expectancy in 5 year bands @ 5 year intervals (except age 1)
+        # region, sex, period, period start year, x0, **x1**, x5, x10, x15,...
         self.life_expectancy_ages = pd.read_csv(settings.CSV_LIFE_EXPECTANCY_PATH)
+        
+        # daily population projections 2013-2022
+        # country, date (Y/M/D), pop total
         self.total_population = pd.read_csv(settings.CSV_TOTAL_POPULATION_PATH)
+        
+        # survival ratio in 5 year bands @ 5 year intervals
+        # region, sex, period, period start year, x0, x5, x10, x15,...        
         self.survival_ratio = pd.read_csv(settings.CSV_SURVIVAL_RATIO_PATH)
+        
+        # continent, country mapping
         self.continent_countries = pd.read_csv(settings.CSV_CONTINENT_COUNTRIES)
+        
+        # births per day by country 1950 - 2100
         self.births_day_country = pd.read_csv(settings.CSV_BIRTHS_DAY_COUNTRY)
+        
         self.countries = pd.unique(self.data.Location).tolist()
         logger.info('Parsed CSVs in %.02f seconds', (time.clock()-start))
 
