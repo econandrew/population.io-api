@@ -1,33 +1,9 @@
 #from algorithms import *
-from dateutil.relativedelta import *
+#from dateutil.relativedelta import *
 import datetime
 import time
-import numpy as np
 
-def cmp_relativedelta(rd1, rd2):
-    if rd1.years < rd2.years:
-        return -1
-    elif rd1.years > rd2.years:
-        return +1
-    elif rd1.months < rd2.months:
-        return -1
-    elif rd1.months > rd2.months:
-        return +1
-    elif rd1.days < rd2.days:
-        return -1
-    elif rd1.days > rd2.days:
-        return +1
-    else:
-        return 0
-    
-def drange(start, end, step, c=cmp):
-    next = start
-    while c(next, end) < 0:
-        #print "yielding",next, end
-        yield next
-        next = next + step
-
-class PopulationModel(object):        
+class PopulationModel(object):
     def get_regions(self):
         raise NotImplemented
         
@@ -35,7 +11,7 @@ class PopulationModel(object):
         raise NotImplemented
         
     def get_age_quantum(self):
-        raise NotImplemented
+        return 1
         
     def get_sexes(self):
         raise NotImplemented
@@ -44,28 +20,15 @@ class PopulationModel(object):
         raise NotImplemented
         
     def get_date_quantum(self):
-        raise NotImplemented
-
-    def get_date_start(self, date):
-        raise NotImplemented
-        
-    def get_date_end(self, date):
-        raise NotImplemented
+        return 1
     
-    def get_enum_date(self, date):
-        raise NotImplemented
-               
     def pop_age(self, date, region, sex, age):
         raise NotImplemented
         
     def pop_dob(self, date, region, sex, dob):
-        date = self.get_enum_date(date)
-        earliest_dob = self.get_date_start(dob)
-        latest_dob = self.get_date_end(dob)
-        lowest_age = relativedelta(date, latest_dob)
-        highest_age = relativedelta(date, earliest_dob)
-        # FIXME - this assumes enum_date is always half-way through the date unit (year/month/day)
-        return int((self.pop_age(date, region, sex, lowest_age) + self.pop_age(date, region, sex, highest_age))/2)
+        #print "PD", date, region, sex, dob
+        age = date - dob
+        return self.pop_age(date, region, sex, age)
         
     def pop_integrate_age(self, date, region, sex, age_from = None, age_to = None):
         age_range = self.get_age_range()
@@ -75,7 +38,7 @@ class PopulationModel(object):
             age_to = age_range[1]
            
         multiage_pop = 0
-        for age in drange(age_from, age_to+self.get_age_quantum(), self.get_age_quantum(), cmp_relativedelta):
+        for age in range(age_from, age_to+self.get_age_quantum(), self.get_age_quantum()):
             multiage_pop += self.pop_age(date, region, sex, age)
             
         return multiage_pop
@@ -89,8 +52,7 @@ class PopulationModel(object):
             dob_to = date - age_range[0]
             
         multidob_pop = 0
-        for dob in drange(dob_from, dob_to+self.get_date_quantum(), self.get_date_quantum()):
-            #print self.pop_dob(date, region, sex, dob)
+        for dob in range(dob_from, dob_to+self.get_date_quantum(), self.get_date_quantum()):
             multidob_pop += self.pop_dob(date, region, sex, dob)
             
         return multidob_pop
@@ -105,7 +67,7 @@ class PopulationModel(object):
         def midpoint(lower, upper):
             return lower + (upper - lower) / 2
         
-        while cmp_relativedelta(relativedelta(date_upper, date_lower), self.get_date_quantum()):   
+        while date_upper - date_lower > self.get_date_quantum():   
             date_midpoint = midpoint(date_lower, date_upper)
             pop_midpoint = self.pop_integrate_dob(date_midpoint, region, sex, dob_from, date_midpoint)
             print 'd',date_lower, date_midpoint, date_upper
@@ -128,75 +90,98 @@ class PopulationModel(object):
     def pop(self, date, region, sex, age = None, dob = None):
         if age and dob:
             raise ValueError("must specify exactly one of age, dob")
-
-class MidYearPopulationModel(PopulationModel):    
-    def get_age_quantum(self):
-        return relativedelta(years=1)
-        
-    def get_date_quantum(self):
-        return relativedelta(years=1)
-
-    def get_date_start(self, date):
-        return datetime.date(date.year, 1, 1)
-        
-    def get_date_end(self, date):
-        return datetime.date(date.year, 12, 31)
+                
+import pandas as pd
+import numpy as np
+class SingleYearPopulationModel(PopulationModel):
+    sexmap = {
+        'M': 'PopMale',
+        'F': 'PopFemale'
+    }
     
-    def get_enum_date(self, date):
-        return datetime.date(date.year, 6, 30)
-              
+    def __init__(self, filename):
+        # population by single year of age and year from 1950-2100
+        # ?, LocID, Location (Country), VarID, Variant, Time, Age, pop male, pop female, pop total
+        self.raw = pd.read_csv(filename)
+        self.raw.YOB = self.raw.Time - self.raw.Age
+    
+    def get_regions(self):
+        return self.raw.Location.unique()
+        
+    def get_age_range(self):
+        return (self.raw.Age.min(), self.raw.Age.max())
+        
+    def get_sexes(self):
+        return np.array(self.sexmap.keys())
+        
+    def get_date_range(self):
+        return (self.raw.Time.min(), self.raw.Time.max())
+        
+    def pop_age(self, date, region, sex, age):
+        if age < self.get_age_range()[0] or age > self.get_age_range()[1]:
+            return 0
+        
+        return int(np.rint(self.raw[
+            (self.raw.Time == date) &
+            (self.raw.Location == region) &
+            (self.raw.Age == age)
+        ].get(SingleYearPopulationModel.sexmap[sex])*1000),)
+        
+    def pop_integrate_age(self, date, region, sex, age_from = None, age_to = None):
+        age_range = self.get_age_range()
+        if not age_from:
+            age_from = age_range[0]
+        if not age_to:
+            age_to = age_range[1]
+           
+        return int(np.rint(self.raw[
+            (self.raw.Time == date) &
+            (self.raw.Location == region) &
+            (self.raw.Age >= age_from) &
+            (self.raw.Age <= age_to)
+        ].get(SingleYearPopulationModel.sexmap[sex]).sum()*1000))        
+
+    def pop_integrate_dob(self, date, region, sex, dob_from = None, dob_to = None):
+        age_range = self.get_age_range()
+        date_range = self.get_date_range()
+        if not dob_from:
+            dob_from = date_range[0] - age_range[1]
+        if not dob_to:
+            dob_to = date_range[1] - age_range[0]
+           
+        return int(np.rint(self.raw[
+            (self.raw.Time == date) &
+            (self.raw.Location == region) &
+            (self.raw.YOB >= dob_from) &
+            (self.raw.YOB <= dob_to)
+        ].get(SingleYearPopulationModel.sexmap[sex]).sum()*1000))        
+
 import csv
-import os.path
-import cPickle as pickle
 from collections import defaultdict
-class NpSingleYearPopulationModel(MidYearPopulationModel):
+class NpSingleYearPopulationModel(PopulationModel):
     def _age_index(self,age):
-        return (age-self.age_range[0]).years
+        return int(age)-self.age_range[0]
         
     def _date_index(self,date):
-        return relativedelta(date, self.date_range[0]).years
+        return int(date)-self.date_range[0]
 
-    def __init__(self, filename, check_or_create_pickle = False):
-        self.age_range = (relativedelta(years=0), relativedelta(years=100))
-        self.date_range = (self.get_enum_date(datetime.date(1950,1,1)),self.get_enum_date(datetime.date(2100,1,1)))
+    def __init__(self, filename):
+        self.age_range = (0, 100)
+        self.date_range = (1950,2100)
         self.sexes = ('M','F')
-        self.arrays = None
-        if check_or_create_pickle and os.path.isfile(filename + ".pickle"):
-            with open(filename + ".pickle", "rb") as file:
-                self.arrays = pickle.load(file)
-        else:
-            self.load_pop_csv(filename)
-            if check_or_create_pickle:
-                with open(filename + ".pickle", "wb") as file:
-                    pickle.dump(self.arrays, file)
-        
+        self.arrays = defaultdict(lambda: defaultdict(lambda: np.empty((self.age_range[1]-self.age_range[0]+1, self.date_range[1]-self.date_range[0]+1))))
+        self.load_pop_csv(filename)
 
     def load_pop_csv(self, filename):
-        self.arrays = defaultdict(lambda: defaultdict(lambda: np.empty((
-            self._age_index(self.age_range[1])-self._age_index(self.age_range[0])+1,
-            self._date_index(self.date_range[1])-self._date_index(self.date_range[0])+1
-        ))))
-
         with open(filename, 'r') as file:
             reader = csv.DictReader(file)
             # ?, LocID, Location (Country), VarID, Variant, Time, Age, pop male, pop female, pop total
 
             for row in reader:
                 loc_dict = self.arrays[row['Location']]
-                loc_dict['M'][
-                    self._age_index(relativedelta(years=int(row['Age']))),
-                    self._date_index(self.get_enum_date(datetime.date(int(row['Time']),1,1)))
-                ] = round(float(row['PopMale'])*1000)
-                loc_dict['F'][
-                    self._age_index(relativedelta(years=int(row['Age']))),
-                    self._date_index(self.get_enum_date(datetime.date(int(row['Time']),1,1)))
-                ] = round(float(row['PopFemale'])*1000)
-
-        for loc in self.arrays:
-            self.arrays[loc] = dict(self.arrays[loc])
+                loc_dict['M'][self._age_index(row['Age']), self._date_index(row['Time'])] = round(float(row['PopMale'])*1000)
+                loc_dict['F'][self._age_index(row['Age']),self._date_index(row['Time'])] = round(float(row['PopFemale'])*1000)
         
-        self.arrays = dict(self.arrays)
-                
     def get_regions(self):
         return self.arrays.keys()
         
@@ -210,12 +195,10 @@ class NpSingleYearPopulationModel(MidYearPopulationModel):
         return self.date_range
         
     def pop_age(self, date, region, sex, age):
-        date = self.get_enum_date(date)
-        if cmp_relativedelta(age, self.age_range[0]) < 0 or cmp_relativedelta(age, self.age_range[1]) > 0:
+        if age < self.get_age_range()[0] or age > self.get_age_range()[1]:
             return 0
         
-        pop = self.arrays[region][sex][self._age_index(age),self._date_index(date)]
-        return pop
+        return self.arrays[region][sex][self._age_index(age),self._date_index(date)]
         
 
 DAYS_PER_YEAR = 365.25
@@ -381,8 +364,8 @@ class LinearDailyPopulationModel(PopulationModel):
 import sys 
 if __name__ == "__main__":
 #    pop = SingleYearPopulationModel("../data/WPP2012_INT_F3_Population_By_Sex_Annual_Single_100_Medium.csv")
-    pop2 = NpSingleYearPopulationModel("../data/WPP2012_INT_F3_Population_By_Sex_Annual_Single_100_Medium.csv", True)
-    #pop_day = LinearDailyPopulationModel(pop2)
+    pop2 = NpSingleYearPopulationModel("../data/WPP2012_INT_F3_Population_By_Sex_Annual_Single_100_Medium.csv")
+    pop_day = LinearDailyPopulationModel(pop2)
 
     start_time = time.time()
     def elapsed():
@@ -392,12 +375,7 @@ if __name__ == "__main__":
         start_time = new_time
         return out
 
-    print pop2.pop_age(datetime.date(2014,1,1), "Australia", "M", relativedelta(years=2))
-    print pop2.pop_integrate_age(datetime.date(2014,1,1), "Australia", "M"), elapsed()
-    print pop2.pop_integrate_age(datetime.date(2014,1,1), "Australia", "M", relativedelta(years=10), relativedelta(years=19))
-    print pop2.pop_integrate_dob(datetime.date(2014,1,1), "Australia", "M")
-    print pop2.pop_integrate_dob_inverse_date(3000000000, "World", "M", datetime.date(1981,1,1)), elapsed()
-
+    #print pop2.pop_integrate_age(2014, "Australia", "M"), elapsed()
     #print pop_day.pop_integrate_age(2014, "Australia", "M"), elapsed()
     
     #print pop_day.pop_integrate_age(2014, "Australia", "M", int(2.5*DAYS_PER_YEAR), int(10*DAYS_PER_YEAR))
@@ -408,18 +386,20 @@ if __name__ == "__main__":
     #print PopulationModel.pop_integrate_age(pop_day, to_epoch_days(datetime.date(2014,7,1)), "Australia", "M", int(0*DAYS_PER_YEAR), int(1*DAYS_PER_YEAR)), elapsed()
     #print sum(pop_day.pop_age(to_epoch_days(datetime.date(2014,7,1)), "Australia", "M", age) for age in range(0,365))
 
-    #print pop2.pop_integrate_dob(2014, "Australia", "M"), elapsed()
-    #print PopulationModel.pop_integrate_dob(pop_day, to_epoch_days(datetime.date(2014,7,1)), "Australia", "M"), elapsed()
-    #print pop_day.pop_integrate_dob(to_epoch_days(datetime.date(2014,7,1)), "Australia", "M"), elapsed()
+    print pop2.pop_integrate_dob(2014, "Australia", "M"), elapsed()
+    print PopulationModel.pop_integrate_dob(pop_day, to_epoch_days(datetime.date(2014,7,1)), "Australia", "M"), elapsed()
+    print pop_day.pop_integrate_dob(to_epoch_days(datetime.date(2014,7,1)), "Australia", "M"), elapsed()
     
-    #sys.exit(0)
+    sys.exit(0)
     #print pop_day.pop_age(to_epoch_days(datetime.date(2010, 6, 15)), "Australia", "M", 19*365.25), elapsed() 
     #print pop_day.pop_dob(to_epoch_days(datetime.date(2010, 6, 15)), "Australia", "M", to_epoch_days(datetime.date(1991, 9, 15))), elapsed()
     #print PopulationModel.pop_dob(pop_day, to_epoch_days(datetime.date(2010, 6, 15)), "Australia", "M", to_epoch_days(datetime.date(1991, 9, 15))), elapsed()
 
-    #print pop2.pop_integrate_dob_inverse_date(3000000000, "World", "M", 1981), elapsed()
-    #print from_epoch_days(pop_day.pop_integrate_dob_inverse_date(3000000000, "World", "M", to_epoch_days(datetime.date(1981,1,1)))), elapsed()
+    print pop2.pop_integrate_dob_inverse_date(3000000000, "World", "M", 1981), elapsed()
+    print from_epoch_days(pop_day.pop_integrate_dob_inverse_date(3000000000, "World", "M", to_epoch_days(datetime.date(1981,1,1)))), elapsed()
 
     #print pop.pop_dob(2010, "Australia", "M", 1981)
     #print pop.pop_integrate_age(2014, "Australia", "M")
     #print PopulationModel.pop_integrate_age(pop,2014, "Australia", "M")
+        
+    
