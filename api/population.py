@@ -315,8 +315,10 @@ class Spline2DDailyPopulationModel(DailyPopulationModel):
     def build_model(self, region, sex):
         # bad encapsulation - can do better
         pop = self.base_model.arrays[region][sex] / float(DAYS_PER_YEAR)
+        pop = np.vstack((pop[0:1,:],pop))
         # self._age_index(row['Age']), self._date_index(row['Time'])
         pop_age = list((age+0.5)*DAYS_PER_YEAR for age in range(self.base_model.get_age_range()[0], self.base_model.get_age_range()[1]+self.base_model.get_age_quantum(), self.base_model.get_age_quantum()))
+        pop_age = [self.base_model.get_age_range()[0]*DAYS_PER_YEAR]+pop_age
         pop_date = list(to_epoch_days(datetime.date(year, 6, 30)) for year in range(self.base_model.get_date_range()[0], self.base_model.get_date_range()[1]+self.base_model.get_date_quantum(), self.base_model.get_date_quantum()))
         
         if pop.shape != (len(pop_age), len(pop_date)):
@@ -338,7 +340,8 @@ class Spline2DDailyPopulationModel(DailyPopulationModel):
             age_to = age_range[1]
     
         model = self.get_model(region, sex)
-        sum = model.integral(age_from, age_to, date - 0.5, date + 0.5)
+        #print list(model(age/10.0, date) for age in range(age_from*10, age_to*10))
+        sum = model.integral(age_from, age_to+1, date - 0.1, date + 0.1)*5
         return sum
         
     def pop_integrate_dob(self, date, region, sex, dob_from = None, dob_to = None):
@@ -383,7 +386,7 @@ start_time = time.time()
 def elapsed():
     global start_time
     new_time = time.time()
-    out = str(round(new_time - start_time,2)) + " s"
+    out = str(round(new_time - start_time,4)) + " s"
     start_time = new_time
     return out
 
@@ -406,14 +409,16 @@ def test_interp():
     print pop_day.pop_age(to_epoch_days(datetime.date(2010, 1, 1)), "Australia", "M", 19*365.25), elapsed() 
     print pop_int.pop_age(to_epoch_days(datetime.date(2010, 1, 1)), "Australia", "M", 19*365.25), elapsed()
     
-    print pop_day.pop_integrate_dob(to_epoch_days(datetime.date(2015,3,14)),"World","M",to_epoch_days(datetime.date(1981,10,28)),None), elapsed()
-    print pop_int.pop_integrate_dob(to_epoch_days(datetime.date(2015,3,14)),"World","M",to_epoch_days(datetime.date(1981,10,28)),None), elapsed()
-    print PopulationModel.pop_integrate_dob(pop_int,to_epoch_days(datetime.date(2015,3,14)),"World","M",to_epoch_days(datetime.date(1981,10,28)),None), elapsed()
-    print pop_org.pop_integrate_dob(to_epoch_days(datetime.date(2015,3,14)),"World","M",to_epoch_days(datetime.date(1981,10,28)),None), elapsed()
+    dob = to_epoch_days(datetime.date(1971,3,16))
+    date = to_epoch_days(datetime.date(2020,10,2))
+    print pop_day.pop_integrate_dob(date,"World","M",dob,None), elapsed()
+    print pop_int.pop_integrate_dob(date,"World","M",dob,None), elapsed()
+    print PopulationModel.pop_integrate_dob(pop_int, date,"World","M",dob,None), elapsed()
+    print pop_org.pop_integrate_dob(date,"World","M",dob,None), elapsed()
 
-    print from_epoch_days(pop_day.pop_integrate_dob_inverse_date(3000000000, "World", "M", to_epoch_days(datetime.date(1981,10,28)))), elapsed()
-    print from_epoch_days(pop_int.pop_integrate_dob_inverse_date(3000000000, "World", "M", to_epoch_days(datetime.date(1981,10,28)))), elapsed()
-    print from_epoch_days(pop_org.pop_integrate_dob_inverse_date(3000000000, "World", "M", to_epoch_days(datetime.date(1981,10,28)))), elapsed()
+    print from_epoch_days(pop_day.pop_integrate_dob_inverse_date(5e9, "World", "M", to_epoch_days(datetime.date(1981,10,28)))), elapsed()
+    print from_epoch_days(pop_int.pop_integrate_dob_inverse_date(5e9, "World", "M", to_epoch_days(datetime.date(1981,10,28)))), elapsed()
+    print from_epoch_days(pop_org.pop_integrate_dob_inverse_date(5e9, "World", "M", to_epoch_days(datetime.date(1981,10,28)))), elapsed()
 
 
 def compare_original():
