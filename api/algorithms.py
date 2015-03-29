@@ -14,14 +14,6 @@ from datastore import dataStore
 
 from utils import relativedelta_to_decimal_years
 
-
-
-# AGE in days refering to the annual data - we assume that the average age of one years old is 1 years and 183 days
-AGE3 = [x*365+183 for x in range(0,100)]
-
-# Range of days (age)
-AGEOUT = range(0, 36501)
-
 SEXES = {'male': 'PopMale', 'female': 'PopFemale', 'unisex': 'PopTotal',}
 SEXES_LIFE_EXPECTANCY = {'male': 1, 'female': 2,}
 

@@ -1,6 +1,13 @@
 import pandas as pd
 import os.path
 
+###################################################################################################
+# This file is a very rough cut of the relevant code from the previous implementation so I could
+# test it without needing Django dependencies working. Ideally, if we want to keep the old
+# implementation around, we should restructure it more smoothly as a PopulationModel.
+###################################################################################################
+
+
 class PickleDataStore(object):
     """ Data store implementation based on reading the base CSVs (population and life expectancy) into memory and then fetching
         the cached tables as pickle files with predefined filenames in a local filesystem path.
