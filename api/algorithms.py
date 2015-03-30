@@ -11,10 +11,19 @@ from scipy.interpolate import InterpolatedUnivariateSpline
 
 from exceptions import *
 from datastore import dataStore
+import population
 
 from utils import relativedelta_to_decimal_years
 
-SEXES = {'male': 'PopMale', 'female': 'PopFemale', 'unisex': 'PopTotal',}
+from django.conf import settings
+
+pop_year = population.NpSingleYearPopulationModel(settings.CSV_POPULATION_PATH, check_or_create_pickle=True)
+pop_day = population.BicubicSplineDailyPopulationModel(pop_year)
+
+SEXES = {'male': 'M', 'female': 'F', 'unisex': 'All',}
+
+### These are now only used by the life expectency functions and not the population module
+###
 SEXES_LIFE_EXPECTANCY = {'male': 1, 'female': 2,}
 
 POSIX_EPOCH = date(1970, 1, 1)
@@ -26,126 +35,8 @@ def inPosixDays(date):
     :return: the corresponding 'posix days' to the given datetime object
     """
     return (date - POSIX_EPOCH).days
-
-def generateExtrapolationTable(sex, region):
-    """
-    Function that extrapolates the 1st July data to each calender day
-
-    :param region: valid values: anything from 'regions'
-    :param sex: valid values: female, male, unisex
-    :return: an extrapolation table for the given region/sex tuple
-    """
-    pop1 = dataStore.data[dataStore.data.Location == region]
-    pop1 = pop1[['Time', 'Age', SEXES[sex]]]
-    # pop1 = data[['Time', 'Age', SEX]].query('Location' == CNTRY)
-    #print pop1
-
-    # pop1 now has {year, age, popn} for the given country and sex 1950-2100
-
-    july1from1950to2100 = [inPosixDays(date(y, 7, 1)) for y in xrange(1950, 2100+1)]
-
-    dateRange1950to2100inPosixDays = range(inPosixDays(date(1950,1,1)), inPosixDays(date(2100,12,31))+1)
-
-    ''' --- Date interpolation function --- '''
-    def dateInterp(iage):
-        """"
-        Given an empty column representing a single 5 year age band, interpolate external popn data
-        from yearly to daily data using splines, and return the daily population counts.
-        """
-        popi = np.asarray(pop1.loc[dataStore.data.Age == iage.name, SEXES[sex]])
-        # popi is now a single column of yearly population for a given age and sex
-
-        # spline interpolation function from Scipy Package
-        iuspl = InterpolatedUnivariateSpline(july1from1950to2100, popi, k=4)
-        return iuspl(dateRange1950to2100inPosixDays)
-
-    # --- store the results of the date interpolation --- #
-    result1 = pd.DataFrame(index = range(0,len(dateRange1950to2100inPosixDays)), columns = range(0,100))    
-    table = result1.apply(dateInterp, axis=0)
-
-    # Change column names by appending "age_"
-    oldHeaders = table.columns
-    newHeaders = []
-    for i in oldHeaders:
-        newHeaders.append("age" + "_" + str(i))
-    table.columns = newHeaders
-    #print result1.head # results: "age_0, age_1, ..."
-
-    # Convert the numerical days to date string
-    def toDate(d):
-        return (date(1970, 1, 1) + timedelta(days=d)).strftime('%Y-%m-%d')
-    toDate = np.vectorize(toDate) # vectorize the function to iterate over numpy ndarray
-    #fullDateRange = toDate(dateRange1970to2100inPosixDays) # 1st result: 1950-01-01
-    fullDateRange = len(dateRange1950to2100inPosixDays)*[None]
-    for i in range(0,len(dateRange1950to2100inPosixDays)):
-        fullDateRange[i] = toDate(dateRange1950to2100inPosixDays[i])
-
-    # Add the fullDateRange to the result1
-    table['date1'] = fullDateRange
-
-    # table will now be a crosstab of integer days (1950-2100) x single year of age (age_0-age_99)
-    # with a date type column appended
-
-    return table
-    
-dataStore.registerTableBuilder(generateExtrapolationTable)   # TODO: not super nice architecture, but avoids the cyclic dependency for now
-
-def dayInterpA(table, date):
-    """
-    function that interpolates age in days
-
-    :param table: the extrapolation table to use
-    :param date: the date
-    :return:
-    """
-    iDate = date.strftime('%Y-%m-%d')
-    # age 0 to 99 - select a row containing popn by each single year of age for the given date
-    popi = table[table.date1 == iDate]
-
-    # Remove the columns for age 100 and the date1
-    popi = popi.iloc[:,0:100]
-
-    # store the popi results into an array for the interpolation
-    #popi = (np.asarray(popi)).tolist()
-    popi = np.asarray(popi)
-
-    # Interpolate the age in Days
-    # NOTE: this seems like a bad way to interpolate this - is it the case that
-    # the spline-interpolate population over the days of a year will necessarily
-    # add back up to the population in that year. Check this.
-    iuspl2 = InterpolatedUnivariateSpline(AGE3, popi/365)
-    iuspl2_pred = iuspl2(AGEOUT)
-
-    # the output
-    merged = pd.DataFrame(index = range(0,len(AGEOUT)), columns = ['AGE','POP'])
-    merged['AGE'] = AGEOUT
-    merged['POP'] = iuspl2_pred
-    
-    # CHECK: probably returns a frame containing popn by single day of age for the given date
-    return merged
-
-def _calculateRankByDate(table, dob, date):
-    """
-    Returns the rank of a person born on dob for the given sex/country represented by table,
-    on the given date, if you lined up everybody by exact age in days from youngest to oldest.
-    """
-    
-    # do the interpolation
-    iAge = inPosixDays(date) - inPosixDays(dob)   # age in days at date # FIXME: isn't this just (date - dob).days?
-    X = dayInterpA(table, date) # X is the entire population count by single day of age on date
-
-    # store age and pop in array
-    ageArray = np.asarray(X.AGE)
-    popArray = np.asarray(X.POP)
-
-    # calc cumulative sum of the population
-    cumSum =  np.cumsum(popArray)
-
-    # take the mean of the cumulative sum of the iAge year and preceeding
-    rank = np.mean(np.extract((ageArray >= iAge -1) & (ageArray <= iAge), cumSum))
-    if not rank > 0:
-        raise RuntimeError('Rank calculation failed due to internal error')   # we should never get here, if we do that means the parameter checks at the beginning are incomplete
-    return rank
+###
+### 
 
 def worldPopulationRankByDate(sex, region, dob, refdate):
     """
@@ -176,17 +67,14 @@ def worldPopulationRankByDate(sex, region, dob, refdate):
     if (refdate - dob).days > 36500:
         raise CalculationTooWideError(refdate)
 
-    # retrieve or build the extrapolation table for this (sex, region) tuple
-    table = dataStore[sex, region]
+    return pop_day.pop_sum_dob(
+        population.to_epoch_days(refdate),
+        region,
+        SEXES[sex],
+        dob_from = population.to_epoch_days(dob),
+        dob_to = population.to_epoch_days(refdate)
+    )
 
-    # do the calculations
-    rank = _calculateRankByDate(table, dob, refdate)
-    return long(rank*1000)
-
-# FIXME: this function seems very inefficient. It finds a date based on a rank, but in order to do that it
-# searches first by decade (10 calls to _calculateRankByDate) then by year (10 more calls) then interpolates
-# linearly (at least that's quick). _calculateRankByDate is itself slow (it does not cache dayInterpA results),
-# so this function is 20 x slow.
 def dateByWorldPopulationRank(sex, region, dob, rank):
     """
     finding the date for specific rank
@@ -209,110 +97,7 @@ def dateByWorldPopulationRank(sex, region, dob, rank):
     if dob < date(1920, 1, 1) or dob > date(2079, 12, 31):   # the end date has been chosen arbitrarily and is probably wrong
         raise BirthdateOutOfRangeError(dob, 'between 1920-01-01 and 2079-12-31')
 
-    # internally, the algorithm works with k-ranks
-    rank = rank / 1000.0
-
-    # prefetch the extrapolation table
-    table = dataStore[sex, region]
-
-    # The number of years from input birth to '2100/01/01'
-    length_time = relativedelta(date(2100, 1, 1), dob).years
-
-    # Make sure that difference between DOB and final Date < 100
-    l_max = min(int(np.floor(length_time/10)*10), 100) # number of years (floor full decades) between dob and 2100
-
-    xx = []
-    for jj in range(1, (len(range(10, l_max+10, 10))+1)): # iterates over decades between dob and 2100
-        try:
-            xx.append(_calculateRankByDate(table, dob, dob + relativedelta(days = jj*3650)))
-        except Exception:
-            # Breaks the function if either the birthdate is too late for some rank or the rank is too high for some birthdate
-            raise DataOutOfRangeError(detail='The input data is out of range: the birthdate is too late for the rank or the rank is too high for the birthdate')
-
-    # check the array for NaN?
-    xx = np.array(xx) # convert xx from list to array
-    #nanIndex = np.where(np.isnan(xx)) # return array of index positions for NANs
-
-    ''' NEED TO BREAK THE FUNCTION IF CC IS TRUE - NOT YET IMPLEMENTED '''
-    # check to see if all of the Ranks are less than the wRank
-    if np.all(xx < rank):
-        raise DataOutOfRangeError(detail='The input data is out of range: the person is too young')
-
-    #print xx
-    # now find the interval containing wRank
-    #print rank
-    #print np.amin(np.where((xx < rank) == False))
-    Upper_bound = (np.amin(np.where((xx < rank) == False))+1)*10 # +1 because of zero index
-    Lower_bound = Upper_bound-10
-
-    if xx[1] > rank:
-        Lower_bound = 2
-
-    if Lower_bound < 2:
-        # I don't know what this error means, but if Lower_bound is < 2, then range_2 will start with a value < 0
-        # which means _calculateRankByDate() will be called with a negative age, and that will fail
-        raise DataOutOfRangeError()
-
-    # Define new range
-    range_2 = np.arange(Lower_bound-2, Upper_bound+1) # +1 due to zero index
-
-    # locate the interval
-    xx_ = np.zeros((len(range_2),2))
-
-    # given that interval, do a yearly interpolation
-    #print range_2
-    for kk in range_2:
-        #print kk
-        xx_[(kk - np.amin(range_2)),0] = _calculateRankByDate(table, dob, dob + relativedelta(years=kk))
-        xx_[(kk - np.amin(range_2)),1] = kk*365
-
-    # Search again for the yearly interval containing wRank
-    if xx_[1,0] > rank:
-        Lower_bound = 0
-        Upper_bound = xx_[-1,1]
-    else:
-        Upper_bound = xx_[np.amin(np.where((xx_[:,0] < rank) == False)),1]
-        Lower_bound = xx_[np.amax(np.where((xx_[:,0] < rank) == True)),1]
-
-    range_3 = np.arange(Lower_bound, Upper_bound+1)
-    #print (range_3)
-
-    #xx_ = np.zeros((len(range_3),2))
-
-    # From this point on, this stuff is within a year (daily), due to the fact that the evolution of the rank is linear
-    # we do linear interpolation to get the exact day faster
-    end_point = range_3[len(range_3)-1]
-    first_point = range_3[0]
-    # print end_point, first_point
-
-    # Get the rank for the first and last days in range_3
-    rank_end = _calculateRankByDate(table, dob, dob + relativedelta(days=end_point))
-    rank_first = _calculateRankByDate(table, dob, dob + relativedelta(days=first_point))
-
-    # This gives us the age when we reach wRank and the exact date
-    final_age = np.interp(rank, [rank_first, rank_end], [Lower_bound, Upper_bound])
-    final_date = dob + relativedelta(days=final_age)
-    #print final_age, final_date
-
-    ''' CHECK THESE INTERPOLATION VALUES '''
-    #now we also want to plot our life-path, so we do spline interpolation for the stuff we calculated in the first step
-    # (i.e. the ranks over decades) and interpolate using bSplines.
-    #xx_interp = InterpolatedUnivariateSpline((np.arange(10, l_max+1, 10)*365),xx)
-    # print xx_interp
-    #x_interp = xx_interp((np.arange(1,36501,365)))
-    # print x_interp
-
-    # find the rank nearest to wRank
-    #find_r = np.amin(np.where(abs(x_interp - rank)))
-    # print find_r
-
-    # The value this function returns
-    #exactAge = round(final_age/365, 1)
-    #age = math.floor(final_age/365)
-    #DATE = final_date
-
-    #pd.DataFrame({'exactAge': pd.Series([exactAge], index = ['1']), 'age': pd.Series([age],index = ['1']), 'DATE': pd.Series([DATE], index = ['1'])})
-    return final_date
+    return population.from_epoch_days(pop_day.pop_sum_dob_inverse_date(rank, region, SEXES[sex], population.to_epoch_days(dob)))
 
 def lifeExpectancyRemaining(sex, region, refdate, age):
     # check that all arguments have the right type (even though it's not very pythonic)
@@ -413,15 +198,16 @@ def populationCount(country, age=None, year=None):
     if year is not None and (year < 1950 or year > 2100):
         raise DataOutOfRangeError('The year %i can not be processed, because only years between 1950 and 2100 are supported' % year)
 
-    data = dataStore.data[dataStore.data['Location']==country]
-    if age:
-        data = data[dataStore.data['Age']==age]
-    if year:
-        data = data[dataStore.data['Time']==year]
     results = []
-    for row in data.iterrows():
-        series = row[1]
-        results.append({'year': series['Time'], 'age': series['Age'], 'males': int(series['PopMale']*1000), 'females': int(series['PopFemale']*1000), 'total': int(series['PopTotal']*1000)})
+    for a in [age] if age else pop_year.ages():
+        for y in [year] if year else pop_year.dates():
+            results.append({
+                'year': y,
+                'age': a,
+                'males': pop_year.pop_age(y, country, 'M', a),
+                'females': pop_year.pop_age(y, country, 'F', a),
+                'total': pop_year.pop_age(y, country, 'All', a)
+            })
     return results
 
 def totalPopulation(country, refdate):
@@ -437,40 +223,35 @@ def totalPopulation(country, refdate):
     if refdate < date(2013, 1, 1) or refdate > date(2022, 12, 31):
         raise CalculationDateOutOfRangeError(refdate, 'between 2013-01-01 and 2022-12-31')
 
-    # filter the rows by country and date, then return the totpop column
-    refdateAsShortDateString = refdate.strftime('%y/%m/%d')
-    column_country = dataStore.total_population['country']
-    column_date = dataStore.total_population['date']
-    row = dataStore.total_population[column_country==country][column_date==refdateAsShortDateString]
-    result = int(row['totpop'])
-    return result
-    
+    return pop_day.pop_sum_age(population.to_epoch_days(refdate), country, 'All')
+
 def continentBirthsByDate(continent, refdate):
-    # check that all arguments have the right type (even though it's not very pythonic)
-    if not isinstance(continent, basestring) or (not isinstance(refdate, date)):
-        raise TypeError('One or more arguments did not match the expected parameter type')
-        
-    # confirm that sex and region contain valid values
-    if continent not in dataStore.continent_countries:
-        raise InvalidContinentError(continent) 
-        
-    # check the various date requirements
-    if refdate < date(1950, 1, 1) or refdate > date(2100, 12, 31):
-        raise CalculationDateOutOfRangeError(refdate, 'between 1950-01-01 and 2100-12-31')
-        
-    refdateAsShortDateString = refdate.strftime('%y/%m/%d')
-         
-    cntrys = dataStore.continent_countries.loc[Continent==continent,'POPIO_NAME']
-     
-    #Population aged 0 at DATE
-    births1 = dataStore.births_day_country.loc[refdateAsShortDateString,cntrys]
-    #Population aged 0 at DATE+1
-    births2 = dataStore.births_day_country.loc[refdateAsShortDateString+1,cntrys]
-     
-    births_on_day = births2-births1
-    births_on_day[births_on_day<0] = 0
-         
-    return list(births_on_day)
+    pass
+#     # check that all arguments have the right type (even though it's not very pythonic)
+#     if not isinstance(continent, basestring) or (not isinstance(refdate, date)):
+#         raise TypeError('One or more arguments did not match the expected parameter type')
+#
+#     # confirm that sex and region contain valid values
+#     if continent not in dataStore.continent_countries:
+#         raise InvalidContinentError(continent)
+#
+#     # check the various date requirements
+#     if refdate < date(1950, 1, 1) or refdate > date(2100, 12, 31):
+#         raise CalculationDateOutOfRangeError(refdate, 'between 1950-01-01 and 2100-12-31')
+#
+#     refdateAsShortDateString = refdate.strftime('%y/%m/%d')
+#
+#     cntrys = dataStore.continent_countries.loc[Continent==continent,'POPIO_NAME']
+#
+#     #Population aged 0 at DATE
+#     births1 = dataStore.births_day_country.loc[refdateAsShortDateString,cntrys]
+#     #Population aged 0 at DATE+1
+#     births2 = dataStore.births_day_country.loc[refdateAsShortDateString+1,cntrys]
+#
+#     births_on_day = births2-births1
+#     births_on_day[births_on_day<0] = 0
+#
+#     return list(births_on_day)
 
 def calculateMortalityDistribution(country, sex, age):
     # check that all arguments have the right type (even though it's not very pythonic)

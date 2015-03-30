@@ -1,11 +1,44 @@
 import pandas as pd
 import os.path
+import population
 
 ###################################################################################################
 # This file is a very rough cut of the relevant code from the previous implementation so I could
 # test it without needing Django dependencies working. Ideally, if we want to keep the old
 # implementation around, we should restructure it more smoothly as a PopulationModel.
 ###################################################################################################
+
+###################################################################################################
+# A wrapper class for the previous method, for comparisons
+###################################################################################################
+
+class OriginalDailyPopulationModel(population.DailyPopulationModel):
+    sexmap = {'M': 'male', 'F': 'female'}
+
+    def __init__(self, base_model):
+        super(OriginalDailyPopulationModel, self).__init__(base_model)
+
+    def pop_age(self, date, region, sex, age):
+        raise NotImplemented
+
+    def pop_sum_dob(self, date, region, sex, dob_from = None, dob_to = None):
+        if dob_to != date:
+            raise NotImplemented("Not implemented for the general case")
+
+        return population_original.worldPopulationRankByDate(
+            self.sexmap[sex],
+            region,
+            population.from_epoch_days(dob_from),
+            population.from_epoch_days(date)
+        )
+
+    def pop_sum_dob_inverse_date(self, pop, region, sex, dob_from):
+        return population.to_epoch_days(dateByWorldPopulationRank(
+            self.sexmap[sex],
+            region,
+            population.from_epoch_days(dob_from),
+            pop
+        ))
 
 
 class PickleDataStore(object):

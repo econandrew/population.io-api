@@ -30,17 +30,35 @@ class PopulationModel(object):
         '''Return a list of regions supported by the model.'''
         raise NotImplementedError
         
+    def regions(self):
+        '''Return an iterator over regions'''
+        return iter(self.get_regions())
+        
     def get_age_range(self):
         '''Return a tuple containing inclusive age boundaries (min_age, max_age)'''
         raise NotImplementedError
+
+    def ages(self):
+        '''Return an iterator over ages'''
+        min_age, max_age = self.get_age_range()
+        return range(min_age, max_age+1)
         
     def get_sexes(self):
         '''Return a list of sexes supported by the model'''
         raise NotImplementedError
+
+    def sexes(self):
+        '''Return an iterator over sexes'''
+        return iter(self.get_sexes())
         
     def get_date_range(self):
         '''Return a tuple containing inclusive date boundaries (min_date, max_date)'''        
         raise NotImplementedError
+        
+    def dates(self):
+        '''Return an iterator over ages'''
+        min_date, max_date = self.get_date_range()
+        return range(min_date, max_date+1)        
                 
     def check_age(self, age, default_age = None, truncate = False):
         '''
@@ -148,17 +166,17 @@ class PopulationModel(object):
         
         If you specify date_from or date_to it will constrain the search to that period.
         '''
-        date_lower = date_from | dob_from
-        date_upper = dob_to | self.get_date_range()[1]
-        pop_lower = self.pop_sum_dob(date_lower, region, sex, dob_from, date_lower)
-        pop_upper = self.pop_sum_dob(date_upper, region, sex, dob_from, date_upper)
+        date_lower = date_from or dob
+        date_upper = date_to or self.get_date_range()[1]
+        pop_lower = self.pop_sum_dob(date_lower, region, sex, dob, date_lower)
+        pop_upper = self.pop_sum_dob(date_upper, region, sex, dob, date_upper)
         
         def midpoint(lower, upper):
             return lower + (upper - lower) / 2
         
         while date_upper - date_lower > 1:   
             date_midpoint = midpoint(date_lower, date_upper)
-            pop_midpoint = self.pop_sum_dob(date_midpoint, region, sex, dob_from, date_midpoint)
+            pop_midpoint = self.pop_sum_dob(date_midpoint, region, sex, dob, date_midpoint)
 
             if pop_midpoint < pop:
                 date_lower, pop_lower = date_midpoint, pop_midpoint
@@ -412,7 +430,7 @@ class BicubicSplineDailyPopulationModel(DailyPopulationModel):
 
         model = self.get_model(region, sex)
         interp = model(age, date)
-        return round(interp)
+        return int(round(interp))
 
     def pop_sum_age(self, date, region, sex, age_from = None, age_to = None):
         date = self.check_date(date)
@@ -430,47 +448,13 @@ class BicubicSplineDailyPopulationModel(DailyPopulationModel):
         else:
             pop_sum = model.integral(age_from, age_to+1, date - 0.1, date + 0.1)*5
                 
-        return pop_sum
+        return int(round(pop_sum))
         
     def pop_sum_dob(self, date, region, sex, dob_from = None, dob_to = None):
         age_from = date - dob_to if dob_to is not None else None
         age_to = date - dob_from if dob_from is not None else None
         return self.pop_sum_age(date, region, sex, age_from, age_to)
         
-        
-###################################################################################################
-# A wrapper class for the previous method, for comparisons
-###################################################################################################
-
-import population_original
-class OriginalDailyPopulationModel(DailyPopulationModel):
-    sexmap = {'M': 'male', 'F': 'female'}
-
-    def __init__(self, base_model):
-        super(OriginalDailyPopulationModel, self).__init__(base_model)
-            
-    def pop_age(self, date, region, sex, age):
-        raise NotImplemented
-        
-    def pop_sum_dob(self, date, region, sex, dob_from = None, dob_to = None):
-        if dob_to != date:
-            raise NotImplemented("Not implemented for the general case")
-                
-        return population_original.worldPopulationRankByDate(
-            self.sexmap[sex],
-            region,
-            from_epoch_days(dob_from),
-            from_epoch_days(date)
-        )
-
-    def pop_sum_dob_inverse_date(self, pop, region, sex, dob_from):
-        return to_epoch_days(population_original.dateByWorldPopulationRank(
-            self.sexmap[sex],
-            region,
-            from_epoch_days(dob_from),
-            pop
-        ))
-
 
 
 
